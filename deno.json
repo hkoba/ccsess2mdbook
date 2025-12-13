@@ -1,0 +1,16 @@
+{
+  "tasks": {
+    "run": "deno run -A src/main.ts",
+    "test": "deno test -A",
+    "check": "deno check src/main.ts"
+  },
+  "imports": {
+    "@std/cli": "jsr:@std/cli@^1.0.0",
+    "@std/fs": "jsr:@std/fs@^1.0.0",
+    "@std/path": "jsr:@std/path@^1.0.0",
+    "@std/streams": "jsr:@std/streams@^1.0.0"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}
