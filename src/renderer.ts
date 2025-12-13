@@ -267,9 +267,10 @@ function renderToolResult(
   const toolUse = toolUseMap.get(block.tool_use_id);
   const toolName = toolUse?.name || "Unknown";
 
-  // Hide Read results by default
+  // Show abbreviated Read results by default
   if (options.hideReadResults && toolName === "Read") {
-    return null;
+    const filePath = toolUse?.input?.file_path as string || "(unknown file)";
+    return `\n*Read: \`${filePath}\` (contents omitted)*`;
   }
 
   // Hide all tool results if option is set
