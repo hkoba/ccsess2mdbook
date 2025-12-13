@@ -5,6 +5,7 @@ import { join, basename } from "@std/path";
 import { loadSessionFile } from "./parser.ts";
 import { extractConversationTurns, getSessionMetadata } from "./converter.ts";
 import {
+  buildToolUseMap,
   generateBookToml,
   generateSummary,
   renderTurnToMarkdown,
@@ -16,6 +17,7 @@ interface CliOptions {
   title: string;
   hideThinking: boolean;
   hideToolResults: boolean;
+  hideReadResults: boolean;
   collapseTools: boolean;
   help: boolean;
 }
@@ -35,6 +37,7 @@ OPTIONS:
   -t, --title <title>      Book title (default: extracted from filename)
   --hide-thinking          Hide thinking blocks
   --hide-tool-results      Hide tool result blocks
+  --show-read-results      Show Read tool results (hidden by default)
   --collapse-tools         Collapse tool blocks in <details> tags
   -h, --help               Show this help message
 
@@ -46,7 +49,7 @@ EXAMPLE:
 function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions } | null {
   const parsed = parseArgs(args, {
     string: ["output", "o", "title", "t"],
-    boolean: ["hide-thinking", "hide-tool-results", "collapse-tools", "help", "h"],
+    boolean: ["hide-thinking", "hide-tool-results", "show-read-results", "collapse-tools", "help", "h"],
     alias: {
       o: "output",
       t: "title",
@@ -57,6 +60,7 @@ function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions 
       title: "",
       "hide-thinking": false,
       "hide-tool-results": false,
+      "show-read-results": false,
       "collapse-tools": false,
     },
   });
@@ -78,6 +82,7 @@ function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions 
       title: (parsed.title || parsed.t || "") as string,
       hideThinking: parsed["hide-thinking"] as boolean,
       hideToolResults: parsed["hide-tool-results"] as boolean,
+      hideReadResults: !parsed["show-read-results"] as boolean,
       collapseTools: parsed["collapse-tools"] as boolean,
       help: false,
     },
@@ -148,11 +153,15 @@ async function main(): Promise<void> {
   const renderOptions: RenderOptions = {
     hideThinking: options.hideThinking,
     hideToolResults: options.hideToolResults,
+    hideReadResults: options.hideReadResults,
     collapseTools: options.collapseTools,
   };
 
+  // Build tool use map from all turns for cross-turn reference
+  const toolUseMap = buildToolUseMap(turns);
+
   for (const turn of turns) {
-    const markdown = renderTurnToMarkdown(turn, renderOptions);
+    const markdown = renderTurnToMarkdown(turn, renderOptions, toolUseMap);
     const filename = `chapter_${turn.index}.md`;
     await Deno.writeTextFile(join(srcDir, filename), markdown);
   }

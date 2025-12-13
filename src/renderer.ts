@@ -5,6 +5,7 @@ import type {
   RenderOptions,
   ToolResultBlock,
   ToolUseBlock,
+  ToolUseMap,
   UserMessage,
   AssistantMessage,
 } from "./types.ts";
@@ -88,11 +89,31 @@ function extractUserText(user: UserMessage): string {
 }
 
 /**
+ * Build a map of tool_use id -> ToolUseBlock from all conversation turns
+ */
+export function buildToolUseMap(turns: ConversationTurn[]): ToolUseMap {
+  const map: ToolUseMap = new Map();
+
+  for (const turn of turns) {
+    for (const assistant of turn.assistants) {
+      for (const block of assistant.message.content) {
+        if (block.type === "tool_use") {
+          map.set(block.id, block);
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
  * Render a conversation turn to Markdown
  */
 export function renderTurnToMarkdown(
   turn: ConversationTurn,
-  options: RenderOptions
+  options: RenderOptions,
+  toolUseMap: ToolUseMap
 ): string {
   const lines: string[] = [];
   const title = getChapterTitle(turn);
@@ -103,7 +124,7 @@ export function renderTurnToMarkdown(
   // Render user message
   lines.push("## User");
   lines.push("");
-  lines.push(renderUserMessage(turn.user));
+  lines.push(renderUserMessage(turn.user, toolUseMap, options));
   lines.push("");
 
   // Render assistant messages
@@ -120,7 +141,11 @@ export function renderTurnToMarkdown(
 /**
  * Render user message to Markdown
  */
-function renderUserMessage(user: UserMessage): string {
+function renderUserMessage(
+  user: UserMessage,
+  toolUseMap: ToolUseMap,
+  options: RenderOptions
+): string {
   const content = user.message.content;
 
   if (typeof content === "string") {
@@ -133,7 +158,10 @@ function renderUserMessage(user: UserMessage): string {
     if (block.type === "text") {
       parts.push(block.text);
     } else if (block.type === "tool_result") {
-      parts.push(renderToolResult(block, false));
+      const rendered = renderToolResult(block, toolUseMap, options);
+      if (rendered) {
+        parts.push(rendered);
+      }
     }
   }
 
@@ -180,10 +208,11 @@ function renderContentBlock(
       return renderToolUse(block, options.collapseTools);
 
     case "tool_result":
+      // tool_result in assistant message (shouldn't happen normally)
       if (options.hideToolResults) {
         return null;
       }
-      return renderToolResult(block, options.collapseTools);
+      return renderToolResultGeneric(block, options.collapseTools);
 
     default:
       return null;
@@ -191,15 +220,13 @@ function renderContentBlock(
 }
 
 /**
- * Render thinking block as collapsible
+ * Render thinking block as blockquote
  */
 function renderThinking(thinking: string): string {
-  return `<details>
-<summary>Thinking...</summary>
-
-${thinking}
-
-</details>`;
+  // Convert each line to blockquote format
+  const lines = thinking.split("\n");
+  const quoted = lines.map((line) => `> ${line}`).join("\n");
+  return quoted;
 }
 
 /**
@@ -207,14 +234,17 @@ ${thinking}
  */
 function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
   const inputJson = JSON.stringify(block.input, null, 2);
-  const content = `**Tool: ${block.name}**
+
+  // Use triple newline before **Tool: to ensure proper rendering
+  const content = `\n**Tool: ${block.name}**
 
 \`\`\`json
 ${inputJson}
 \`\`\``;
 
   if (collapse) {
-    return `<details>
+    return `
+<details>
 <summary>Tool: ${block.name}</summary>
 
 ${content}
@@ -226,9 +256,61 @@ ${content}
 }
 
 /**
- * Render tool_result block
+ * Render tool_result block with context from tool_use map
  */
-function renderToolResult(block: ToolResultBlock, collapse: boolean): string {
+function renderToolResult(
+  block: ToolResultBlock,
+  toolUseMap: ToolUseMap,
+  options: RenderOptions
+): string | null {
+  // Find the corresponding tool_use
+  const toolUse = toolUseMap.get(block.tool_use_id);
+  const toolName = toolUse?.name || "Unknown";
+
+  // Hide Read results by default
+  if (options.hideReadResults && toolName === "Read") {
+    return null;
+  }
+
+  // Hide all tool results if option is set
+  if (options.hideToolResults) {
+    return null;
+  }
+
+  // For Task tool, render content as markdown directly
+  if (toolName === "Task") {
+    return renderTaskResult(block);
+  }
+
+  // For other tools, use generic rendering
+  return renderToolResultGeneric(block, options.collapseTools);
+}
+
+/**
+ * Render Task tool result as markdown
+ */
+function renderTaskResult(block: ToolResultBlock): string {
+  let resultText: string;
+
+  if (typeof block.content === "string") {
+    resultText = block.content;
+  } else if (Array.isArray(block.content)) {
+    resultText = block.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("\n\n");
+  } else {
+    resultText = JSON.stringify(block.content, null, 2);
+  }
+
+  const errorPrefix = block.is_error ? "**Error:**\n\n" : "";
+  return errorPrefix + resultText;
+}
+
+/**
+ * Render tool_result block generically (for non-Task tools)
+ */
+function renderToolResultGeneric(block: ToolResultBlock, collapse: boolean): string {
   let resultText: string;
 
   if (typeof block.content === "string") {
@@ -250,14 +332,15 @@ function renderToolResult(block: ToolResultBlock, collapse: boolean): string {
     : resultText;
 
   const errorPrefix = block.is_error ? " (Error)" : "";
-  const content = `**Result${errorPrefix}:**
+  const content = `\n**Result${errorPrefix}:**
 
 \`\`\`
 ${displayText}
 \`\`\``;
 
   if (collapse) {
-    return `<details>
+    return `
+<details>
 <summary>Tool Result${errorPrefix}</summary>
 
 ${content}

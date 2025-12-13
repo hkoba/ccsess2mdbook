@@ -82,8 +82,13 @@ export interface ConversationTurn {
 export interface RenderOptions {
   hideThinking: boolean;
   hideToolResults: boolean;
+  hideReadResults: boolean;
   collapseTools: boolean;
 }
+
+// Tool tracking for associating tool_use with tool_result
+
+export type ToolUseMap = Map<string, ToolUseBlock>;
 
 // Book configuration
 
