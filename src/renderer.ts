@@ -11,7 +11,9 @@ import type {
   TurnMessage,
   Page,
   UserPage,
-  AssistantPage,
+  TextPage,
+  ToolPage,
+  ToolInteraction,
   TurnPages,
 } from "./types.ts";
 
@@ -70,10 +72,13 @@ export function generateSummary(turnPages: TurnPages[], title: string): string {
  * Get filename for a page
  */
 export function getPageFilename(page: Page): string {
-  if (page.type === "user") {
-    return `turn_${page.turnIndex}_user.md`;
-  } else {
-    return `turn_${page.turnIndex}_assistant_${page.pageIndex}.md`;
+  switch (page.type) {
+    case "user":
+      return `turn_${page.turnIndex}_user.md`;
+    case "text":
+      return `turn_${page.turnIndex}_text_${page.pageIndex}.md`;
+    case "tool":
+      return `turn_${page.turnIndex}_tool_${page.pageIndex}.md`;
   }
 }
 
@@ -81,11 +86,29 @@ export function getPageFilename(page: Page): string {
  * Get display title for a page
  */
 function getPageTitle(page: Page): string {
-  if (page.type === "user") {
-    return "User";
-  } else {
-    return `Assistant ${page.pageIndex}`;
+  switch (page.type) {
+    case "user":
+      return "User";
+    case "text":
+      return `Assistant (Text ${page.pageIndex})`;
+    case "tool":
+      return `Assistant (Tools ${page.pageIndex})`;
   }
+}
+
+/**
+ * Check if assistant message starts with text content
+ */
+function assistantStartsWithText(assistant: AssistantMessage): boolean {
+  const content = assistant.message.content;
+  if (content.length === 0) return false;
+
+  // Find first non-thinking block
+  for (const block of content) {
+    if (block.type === "thinking") continue;
+    return block.type === "text";
+  }
+  return false;
 }
 
 /**
@@ -98,9 +121,21 @@ export function convertTurnsToPages(turns: ConversationTurn[]): TurnPages[] {
     const pages: Page[] = [];
     let pageIndex = 1;
 
-    // Track which user messages contain tool_result (to associate with previous assistant)
-    let pendingToolResults: ToolResultBlock[] = [];
-    let lastAssistantPage: AssistantPage | null = null;
+    // Current tool page being built (null if not in tool mode)
+    let currentToolPage: ToolPage | null = null;
+    // Current tool interaction being built
+    let currentInteraction: ToolInteraction | null = null;
+
+    const flushToolPage = () => {
+      if (currentInteraction && currentToolPage) {
+        currentToolPage.interactions.push(currentInteraction);
+        currentInteraction = null;
+      }
+      if (currentToolPage && currentToolPage.interactions.length > 0) {
+        pages.push(currentToolPage);
+        currentToolPage = null;
+      }
+    };
 
     for (const msg of turn.messages) {
       if (msg.type === "user") {
@@ -108,11 +143,7 @@ export function convertTurnsToPages(turns: ConversationTurn[]): TurnPages[] {
 
         if (userText.trim().length > 0) {
           // User message with text - create a user page
-          // First, flush any pending tool results to last assistant
-          if (lastAssistantPage && pendingToolResults.length > 0) {
-            lastAssistantPage.toolResults = pendingToolResults;
-            pendingToolResults = [];
-          }
+          flushToolPage();
 
           const userPage: UserPage = {
             type: "user",
@@ -121,35 +152,53 @@ export function convertTurnsToPages(turns: ConversationTurn[]): TurnPages[] {
             user: msg,
           };
           pages.push(userPage);
-          lastAssistantPage = null;
         } else {
-          // User message with only tool_result - collect them
+          // User message with only tool_result - add to current interaction
           const toolResults = extractToolResults(msg);
-          pendingToolResults.push(...toolResults);
+          if (currentInteraction) {
+            currentInteraction.toolResults.push(...toolResults);
+          }
         }
       } else if (msg.type === "assistant") {
-        // Flush pending tool results to last assistant before creating new one
-        if (lastAssistantPage && pendingToolResults.length > 0) {
-          lastAssistantPage.toolResults = pendingToolResults;
-          pendingToolResults = [];
-        }
+        if (assistantStartsWithText(msg)) {
+          // Assistant starts with text - create a text page
+          flushToolPage();
 
-        const assistantPage: AssistantPage = {
-          type: "assistant",
-          turnIndex: turn.index,
-          pageIndex: pageIndex++,
-          assistant: msg,
-          toolResults: [],
-        };
-        pages.push(assistantPage);
-        lastAssistantPage = assistantPage;
+          const textPage: TextPage = {
+            type: "text",
+            turnIndex: turn.index,
+            pageIndex: pageIndex++,
+            assistant: msg,
+          };
+          pages.push(textPage);
+        } else {
+          // Assistant starts with tool_use - add to tool page
+          // First, flush any previous interaction
+          if (currentInteraction && currentToolPage) {
+            currentToolPage.interactions.push(currentInteraction);
+          }
+
+          // Create new tool page if needed
+          if (!currentToolPage) {
+            currentToolPage = {
+              type: "tool",
+              turnIndex: turn.index,
+              pageIndex: pageIndex++,
+              interactions: [],
+            };
+          }
+
+          // Start new interaction
+          currentInteraction = {
+            toolUse: msg,
+            toolResults: [],
+          };
+        }
       }
     }
 
-    // Flush any remaining tool results
-    if (lastAssistantPage && pendingToolResults.length > 0) {
-      lastAssistantPage.toolResults = pendingToolResults;
-    }
+    // Flush any remaining tool page
+    flushToolPage();
 
     const turnTitle = getTurnTitle(turn);
     result.push({
@@ -284,10 +333,37 @@ export function renderUserPage(
 }
 
 /**
- * Render an assistant page to Markdown
+ * Render a text page (assistant message starting with text) to Markdown
  */
-export function renderAssistantPage(
-  page: AssistantPage,
+export function renderTextPage(
+  page: TextPage,
+  turnTitle: string,
+  options: RenderOptions
+): string {
+  const lines: string[] = [];
+
+  lines.push(`# ${turnTitle}`);
+  lines.push("");
+  lines.push("## Assistant");
+  lines.push("");
+
+  // Render assistant message content
+  lines.push(renderAssistantMessage(page.assistant, options));
+
+  // Add uuid footer
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push(`<small style="color: gray">uuid: ${page.assistant.uuid}</small>`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Render a tool page (grouped tool_use and tool_result) to Markdown
+ */
+export function renderToolPage(
+  page: ToolPage,
   turnTitle: string,
   options: RenderOptions,
   toolUseMap: ToolUseMap
@@ -296,23 +372,28 @@ export function renderAssistantPage(
 
   lines.push(`# ${turnTitle}`);
   lines.push("");
-  lines.push(`## Assistant ${page.pageIndex}`);
+  lines.push("## Tool Interactions");
   lines.push("");
 
-  // Render assistant message content
-  lines.push(renderAssistantMessage(page.assistant, options));
+  const uuids: string[] = [];
 
-  // Render associated tool results
-  if (page.toolResults.length > 0) {
+  for (const interaction of page.interactions) {
+    // Render the tool_use from assistant message
+    lines.push(renderAssistantMessage(interaction.toolUse, options));
     lines.push("");
-    lines.push("### Tool Results");
-    lines.push("");
+    uuids.push(`assistant: ${interaction.toolUse.uuid}`);
 
-    for (const result of page.toolResults) {
-      const rendered = renderToolResult(result, toolUseMap, options);
-      if (rendered) {
-        lines.push(rendered);
-        lines.push("");
+    // Render the tool results
+    if (interaction.toolResults.length > 0) {
+      lines.push("### Results");
+      lines.push("");
+
+      for (const result of interaction.toolResults) {
+        const rendered = renderToolResult(result, toolUseMap, options);
+        if (rendered) {
+          lines.push(rendered);
+          lines.push("");
+        }
       }
     }
   }
@@ -321,7 +402,7 @@ export function renderAssistantPage(
   lines.push("");
   lines.push("---");
   lines.push("");
-  lines.push(`<small style="color: gray">uuid: ${page.assistant.uuid}</small>`);
+  lines.push(`<small style="color: gray">uuid: ${uuids.join(", ")}</small>`);
 
   return lines.join("\n");
 }
@@ -392,15 +473,14 @@ function renderThinking(thinking: string): string {
 function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
   const inputJson = JSON.stringify(block.input, null, 2);
 
-  const content = `\n**Tool: ${block.name}**
+  const content = `**Tool: ${block.name}**
 
 \`\`\`json
 ${inputJson}
 \`\`\``;
 
   if (collapse) {
-    return `
-<details>
+    return `<details>
 <summary>Tool: ${block.name}</summary>
 
 ${content}
@@ -496,8 +576,7 @@ ${displayText}
 \`\`\``;
 
   if (collapse) {
-    return `
-<details>
+    return `<details>
 <summary>Tool Result${errorPrefix}</summary>
 
 ${content}

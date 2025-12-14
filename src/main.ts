@@ -11,7 +11,8 @@ import {
   generateSummary,
   getPageFilename,
   renderUserPage,
-  renderAssistantPage,
+  renderTextPage,
+  renderToolPage,
 } from "./renderer.ts";
 import type { BookConfig, RenderOptions } from "./types.ts";
 
@@ -172,10 +173,16 @@ async function main(): Promise<void> {
     for (const page of turnPage.pages) {
       let markdown: string;
 
-      if (page.type === "user") {
-        markdown = renderUserPage(page, turnPage.title, renderOptions);
-      } else {
-        markdown = renderAssistantPage(page, turnPage.title, renderOptions, toolUseMap);
+      switch (page.type) {
+        case "user":
+          markdown = renderUserPage(page, turnPage.title, renderOptions);
+          break;
+        case "text":
+          markdown = renderTextPage(page, turnPage.title, renderOptions);
+          break;
+        case "tool":
+          markdown = renderToolPage(page, turnPage.title, renderOptions, toolUseMap);
+          break;
       }
 
       const filename = getPageFilename(page);

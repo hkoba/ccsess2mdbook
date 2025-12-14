@@ -103,7 +103,10 @@ export interface BookConfig {
 }
 
 // Page structure for rendering
-// Each turn is split into multiple pages: one for user, one per assistant message
+// Each turn is split into multiple pages:
+// - UserPage: user's text prompt
+// - TextPage: assistant message starting with text content
+// - ToolPage: grouped tool_use calls and their tool_result responses
 
 export interface UserPage {
   type: "user";
@@ -112,15 +115,28 @@ export interface UserPage {
   user: UserMessage;
 }
 
-export interface AssistantPage {
-  type: "assistant";
+// Assistant message that starts with text content
+export interface TextPage {
+  type: "text";
   turnIndex: number;
   pageIndex: number;
   assistant: AssistantMessage;
-  toolResults: ToolResultBlock[];  // tool_result blocks that follow this assistant message
 }
 
-export type Page = UserPage | AssistantPage;
+// Grouped tool interactions: multiple tool_use calls and their results
+export interface ToolInteraction {
+  toolUse: AssistantMessage;  // assistant message with tool_use
+  toolResults: ToolResultBlock[];  // corresponding tool_result blocks
+}
+
+export interface ToolPage {
+  type: "tool";
+  turnIndex: number;
+  pageIndex: number;
+  interactions: ToolInteraction[];  // Multiple tool_use + results grouped together
+}
+
+export type Page = UserPage | TextPage | ToolPage;
 
 export interface TurnPages {
   turnIndex: number;
