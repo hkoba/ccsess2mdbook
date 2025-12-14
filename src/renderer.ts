@@ -78,7 +78,7 @@ function extractUserText(user: UserMessage): string {
     return content;
   }
 
-  // Array of content blocks - find text or tool_result with text
+  // Array of content blocks - find text
   for (const block of content) {
     if (block.type === "text") {
       return block.text;
@@ -108,7 +108,7 @@ export function buildToolUseMap(turns: ConversationTurn[]): ToolUseMap {
 }
 
 /**
- * Render a conversation turn to Markdown
+ * Render a conversation turn to Markdown (flat structure)
  */
 export function renderTurnToMarkdown(
   turn: ConversationTurn,
@@ -135,7 +135,25 @@ export function renderTurnToMarkdown(
     lines.push(renderAssistantMessage(assistant, options));
   }
 
+  // Add uuid reference at the end
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push(renderUuidFooter(turn));
+
   return lines.join("\n");
+}
+
+/**
+ * Render uuid footer for reference
+ */
+function renderUuidFooter(turn: ConversationTurn): string {
+  const uuids: string[] = [];
+  uuids.push(`user: ${turn.user.uuid}`);
+  for (const assistant of turn.assistants) {
+    uuids.push(`assistant: ${assistant.uuid}`);
+  }
+  return `<small style="color: gray">uuid: ${uuids.join(", ")}</small>`;
 }
 
 /**
@@ -223,7 +241,6 @@ function renderContentBlock(
  * Render thinking block as blockquote
  */
 function renderThinking(thinking: string): string {
-  // Convert each line to blockquote format
   const lines = thinking.split("\n");
   const quoted = lines.map((line) => `> ${line}`).join("\n");
   return quoted;
@@ -235,7 +252,6 @@ function renderThinking(thinking: string): string {
 function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
   const inputJson = JSON.stringify(block.input, null, 2);
 
-  // Use triple newline before **Tool: to ensure proper rendering
   const content = `\n**Tool: ${block.name}**
 
 \`\`\`json
