@@ -70,11 +70,14 @@ export interface FileHistorySnapshot {
 export type SessionEntry = UserMessage | AssistantMessage | FileHistorySnapshot;
 
 // Conversation structure
+// A turn is a sequence of messages starting with a user text message
+// and including all subsequent tool interactions until the next user text message
+
+export type TurnMessage = UserMessage | AssistantMessage;
 
 export interface ConversationTurn {
   index: number;
-  user: UserMessage;
-  assistants: AssistantMessage[];
+  messages: TurnMessage[];  // Sequence of user and assistant messages
 }
 
 // Render options

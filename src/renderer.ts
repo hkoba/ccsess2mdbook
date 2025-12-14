@@ -8,6 +8,7 @@ import type {
   ToolUseMap,
   UserMessage,
   AssistantMessage,
+  TurnMessage,
 } from "./types.ts";
 
 /**
@@ -55,10 +56,10 @@ export function generateSummary(turns: ConversationTurn[], title: string): strin
 }
 
 /**
- * Get a title for the chapter based on user message
+ * Get a title for the chapter based on first user text message
  */
 function getChapterTitle(turn: ConversationTurn): string {
-  const userContent = extractUserText(turn.user);
+  const userContent = extractFirstUserText(turn.messages);
   // Take first 50 chars of user message, clean it up
   const title = userContent
     .replace(/\n/g, " ")
@@ -66,6 +67,21 @@ function getChapterTitle(turn: ConversationTurn): string {
     .trim()
     .slice(0, 50);
   return title || `Turn ${turn.index}`;
+}
+
+/**
+ * Extract text from the first user message that contains text
+ */
+function extractFirstUserText(messages: TurnMessage[]): string {
+  for (const msg of messages) {
+    if (msg.type === "user") {
+      const text = extractUserText(msg);
+      if (text.trim().length > 0) {
+        return text;
+      }
+    }
+  }
+  return "";
 }
 
 /**
@@ -95,10 +111,12 @@ export function buildToolUseMap(turns: ConversationTurn[]): ToolUseMap {
   const map: ToolUseMap = new Map();
 
   for (const turn of turns) {
-    for (const assistant of turn.assistants) {
-      for (const block of assistant.message.content) {
-        if (block.type === "tool_use") {
-          map.set(block.id, block);
+    for (const msg of turn.messages) {
+      if (msg.type === "assistant") {
+        for (const block of msg.message.content) {
+          if (block.type === "tool_use") {
+            map.set(block.id, block);
+          }
         }
       }
     }
@@ -121,18 +139,34 @@ export function renderTurnToMarkdown(
   lines.push(`# ${title}`);
   lines.push("");
 
-  // Render user message
-  lines.push("## User");
-  lines.push("");
-  lines.push(renderUserMessage(turn.user, toolUseMap, options));
-  lines.push("");
+  // Render messages in order
+  let lastRole: "user" | "assistant" | null = null;
 
-  // Render assistant messages
-  lines.push("## Assistant");
-  lines.push("");
-
-  for (const assistant of turn.assistants) {
-    lines.push(renderAssistantMessage(assistant, options));
+  for (const msg of turn.messages) {
+    if (msg.type === "user") {
+      // Only add User header for the first user message or when switching from assistant
+      if (lastRole !== "user") {
+        if (lastRole !== null) {
+          lines.push("");
+        }
+        lines.push("## User");
+        lines.push("");
+      }
+      lines.push(renderUserMessage(msg, toolUseMap, options));
+      lines.push("");
+      lastRole = "user";
+    } else if (msg.type === "assistant") {
+      // Only add Assistant header when switching from user
+      if (lastRole !== "assistant") {
+        if (lastRole !== null) {
+          lines.push("");
+        }
+        lines.push("## Assistant");
+        lines.push("");
+      }
+      lines.push(renderAssistantMessage(msg, options));
+      lastRole = "assistant";
+    }
   }
 
   // Add uuid reference at the end
@@ -149,9 +183,8 @@ export function renderTurnToMarkdown(
  */
 function renderUuidFooter(turn: ConversationTurn): string {
   const uuids: string[] = [];
-  uuids.push(`user: ${turn.user.uuid}`);
-  for (const assistant of turn.assistants) {
-    uuids.push(`assistant: ${assistant.uuid}`);
+  for (const msg of turn.messages) {
+    uuids.push(`${msg.type}: ${msg.uuid}`);
   }
   return `<small style="color: gray">uuid: ${uuids.join(", ")}</small>`;
 }

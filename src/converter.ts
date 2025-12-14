@@ -1,5 +1,6 @@
 import type {
   AssistantMessage,
+  ContentBlock,
   ConversationTurn,
   SessionEntry,
   UserMessage,
@@ -20,9 +21,31 @@ function isAssistantMessage(entry: SessionEntry): entry is AssistantMessage {
 }
 
 /**
+ * Check if user message contains text content (not just tool_result)
+ */
+function userMessageHasText(user: UserMessage): boolean {
+  const content = user.message.content;
+
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+
+  // Check if any block is a text block with non-empty content
+  for (const block of content) {
+    if (block.type === "text" && block.text.trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Extract conversation turns from session entries
  *
- * A turn consists of a user message followed by one or more assistant messages.
+ * A turn is a sequence of messages starting with a user message that contains text,
+ * and includes all subsequent tool interactions (user tool_result + assistant responses)
+ * until the next user message with text.
  */
 export function extractConversationTurns(
   entries: SessionEntry[]
@@ -40,23 +63,29 @@ export function extractConversationTurns(
 
   for (const msg of messages) {
     if (isUserMessage(msg)) {
-      // Start a new turn
-      if (currentTurn) {
-        turns.push(currentTurn);
+      if (userMessageHasText(msg)) {
+        // User message with text starts a new turn
+        if (currentTurn && currentTurn.messages.length > 0) {
+          turns.push(currentTurn);
+        }
+        currentTurn = {
+          index: turnIndex++,
+          messages: [msg],
+        };
+      } else {
+        // User message with only tool_result continues current turn
+        if (currentTurn) {
+          currentTurn.messages.push(msg);
+        }
       }
-      currentTurn = {
-        index: turnIndex++,
-        user: msg,
-        assistants: [],
-      };
     } else if (isAssistantMessage(msg) && currentTurn) {
-      // Add to current turn
-      currentTurn.assistants.push(msg);
+      // Add assistant message to current turn
+      currentTurn.messages.push(msg);
     }
   }
 
   // Don't forget the last turn
-  if (currentTurn && currentTurn.assistants.length > 0) {
+  if (currentTurn && currentTurn.messages.length > 0) {
     turns.push(currentTurn);
   }
 
