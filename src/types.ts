@@ -101,3 +101,29 @@ export interface BookConfig {
   description?: string;
   language?: string;
 }
+
+// Page structure for rendering
+// Each turn is split into multiple pages: one for user, one per assistant message
+
+export interface UserPage {
+  type: "user";
+  turnIndex: number;
+  pageIndex: number;
+  user: UserMessage;
+}
+
+export interface AssistantPage {
+  type: "assistant";
+  turnIndex: number;
+  pageIndex: number;
+  assistant: AssistantMessage;
+  toolResults: ToolResultBlock[];  // tool_result blocks that follow this assistant message
+}
+
+export type Page = UserPage | AssistantPage;
+
+export interface TurnPages {
+  turnIndex: number;
+  title: string;  // From first user text
+  pages: Page[];
+}

@@ -9,6 +9,10 @@ import type {
   UserMessage,
   AssistantMessage,
   TurnMessage,
+  Page,
+  UserPage,
+  AssistantPage,
+  TurnPages,
 } from "./types.ts";
 
 /**
@@ -42,25 +46,145 @@ function escapeTomlString(s: string): string {
 }
 
 /**
- * Generate SUMMARY.md content
+ * Generate SUMMARY.md content with nested structure
  */
-export function generateSummary(turns: ConversationTurn[], title: string): string {
+export function generateSummary(turnPages: TurnPages[], title: string): string {
   const lines = [`# ${title}`, ""];
 
-  for (const turn of turns) {
-    const chapterTitle = getChapterTitle(turn);
-    lines.push(`- [${chapterTitle}](./chapter_${turn.index}.md)`);
+  for (const turn of turnPages) {
+    // Turn title as parent chapter
+    lines.push(`- [${turn.title}]()`);
+
+    // Pages as sub-chapters
+    for (const page of turn.pages) {
+      const filename = getPageFilename(page);
+      const pageTitle = getPageTitle(page);
+      lines.push(`  - [${pageTitle}](./${filename})`);
+    }
   }
 
   return lines.join("\n");
 }
 
 /**
- * Get a title for the chapter based on first user text message
+ * Get filename for a page
  */
-function getChapterTitle(turn: ConversationTurn): string {
+export function getPageFilename(page: Page): string {
+  if (page.type === "user") {
+    return `turn_${page.turnIndex}_user.md`;
+  } else {
+    return `turn_${page.turnIndex}_assistant_${page.pageIndex}.md`;
+  }
+}
+
+/**
+ * Get display title for a page
+ */
+function getPageTitle(page: Page): string {
+  if (page.type === "user") {
+    return "User";
+  } else {
+    return `Assistant ${page.pageIndex}`;
+  }
+}
+
+/**
+ * Convert conversation turns into page-based structure
+ */
+export function convertTurnsToPages(turns: ConversationTurn[]): TurnPages[] {
+  const result: TurnPages[] = [];
+
+  for (const turn of turns) {
+    const pages: Page[] = [];
+    let pageIndex = 1;
+
+    // Track which user messages contain tool_result (to associate with previous assistant)
+    let pendingToolResults: ToolResultBlock[] = [];
+    let lastAssistantPage: AssistantPage | null = null;
+
+    for (const msg of turn.messages) {
+      if (msg.type === "user") {
+        const userText = extractUserText(msg);
+
+        if (userText.trim().length > 0) {
+          // User message with text - create a user page
+          // First, flush any pending tool results to last assistant
+          if (lastAssistantPage && pendingToolResults.length > 0) {
+            lastAssistantPage.toolResults = pendingToolResults;
+            pendingToolResults = [];
+          }
+
+          const userPage: UserPage = {
+            type: "user",
+            turnIndex: turn.index,
+            pageIndex: pageIndex++,
+            user: msg,
+          };
+          pages.push(userPage);
+          lastAssistantPage = null;
+        } else {
+          // User message with only tool_result - collect them
+          const toolResults = extractToolResults(msg);
+          pendingToolResults.push(...toolResults);
+        }
+      } else if (msg.type === "assistant") {
+        // Flush pending tool results to last assistant before creating new one
+        if (lastAssistantPage && pendingToolResults.length > 0) {
+          lastAssistantPage.toolResults = pendingToolResults;
+          pendingToolResults = [];
+        }
+
+        const assistantPage: AssistantPage = {
+          type: "assistant",
+          turnIndex: turn.index,
+          pageIndex: pageIndex++,
+          assistant: msg,
+          toolResults: [],
+        };
+        pages.push(assistantPage);
+        lastAssistantPage = assistantPage;
+      }
+    }
+
+    // Flush any remaining tool results
+    if (lastAssistantPage && pendingToolResults.length > 0) {
+      lastAssistantPage.toolResults = pendingToolResults;
+    }
+
+    const turnTitle = getTurnTitle(turn);
+    result.push({
+      turnIndex: turn.index,
+      title: turnTitle,
+      pages,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Extract tool_result blocks from user message
+ */
+function extractToolResults(user: UserMessage): ToolResultBlock[] {
+  const content = user.message.content;
+  if (typeof content === "string") {
+    return [];
+  }
+
+  const results: ToolResultBlock[] = [];
+  for (const block of content) {
+    if (block.type === "tool_result") {
+      results.push(block);
+    }
+  }
+  return results;
+}
+
+/**
+ * Get title for a turn based on first user text
+ */
+function getTurnTitle(turn: ConversationTurn): string {
   const userContent = extractFirstUserText(turn.messages);
-  // Take first 50 chars of user message, clean it up
   const title = userContent
     .replace(/\n/g, " ")
     .replace(/[#\[\]`*_]/g, "")
@@ -94,7 +218,6 @@ function extractUserText(user: UserMessage): string {
     return content;
   }
 
-  // Array of content blocks - find text
   for (const block of content) {
     if (block.type === "text") {
       return block.text;
@@ -126,97 +249,81 @@ export function buildToolUseMap(turns: ConversationTurn[]): ToolUseMap {
 }
 
 /**
- * Render a conversation turn to Markdown (flat structure)
+ * Render a user page to Markdown
  */
-export function renderTurnToMarkdown(
-  turn: ConversationTurn,
-  options: RenderOptions,
-  toolUseMap: ToolUseMap
+export function renderUserPage(
+  page: UserPage,
+  turnTitle: string,
+  _options: RenderOptions
 ): string {
   const lines: string[] = [];
-  const title = getChapterTitle(turn);
 
-  lines.push(`# ${title}`);
+  lines.push(`# ${turnTitle}`);
+  lines.push("");
+  lines.push("## User");
   lines.push("");
 
-  // Render messages in order
-  let lastRole: "user" | "assistant" | null = null;
-
-  for (const msg of turn.messages) {
-    if (msg.type === "user") {
-      // Only add User header for the first user message or when switching from assistant
-      if (lastRole !== "user") {
-        if (lastRole !== null) {
-          lines.push("");
-        }
-        lines.push("## User");
-        lines.push("");
+  const content = page.user.message.content;
+  if (typeof content === "string") {
+    lines.push(content);
+  } else {
+    for (const block of content) {
+      if (block.type === "text") {
+        lines.push(block.text);
       }
-      lines.push(renderUserMessage(msg, toolUseMap, options));
-      lines.push("");
-      lastRole = "user";
-    } else if (msg.type === "assistant") {
-      // Only add Assistant header when switching from user
-      if (lastRole !== "assistant") {
-        if (lastRole !== null) {
-          lines.push("");
-        }
-        lines.push("## Assistant");
-        lines.push("");
-      }
-      lines.push(renderAssistantMessage(msg, options));
-      lastRole = "assistant";
     }
   }
 
-  // Add uuid reference at the end
+  // Add uuid footer
   lines.push("");
   lines.push("---");
   lines.push("");
-  lines.push(renderUuidFooter(turn));
+  lines.push(`<small style="color: gray">uuid: ${page.user.uuid}</small>`);
 
   return lines.join("\n");
 }
 
 /**
- * Render uuid footer for reference
+ * Render an assistant page to Markdown
  */
-function renderUuidFooter(turn: ConversationTurn): string {
-  const uuids: string[] = [];
-  for (const msg of turn.messages) {
-    uuids.push(`${msg.type}: ${msg.uuid}`);
-  }
-  return `<small style="color: gray">uuid: ${uuids.join(", ")}</small>`;
-}
-
-/**
- * Render user message to Markdown
- */
-function renderUserMessage(
-  user: UserMessage,
-  toolUseMap: ToolUseMap,
-  options: RenderOptions
+export function renderAssistantPage(
+  page: AssistantPage,
+  turnTitle: string,
+  options: RenderOptions,
+  toolUseMap: ToolUseMap
 ): string {
-  const content = user.message.content;
+  const lines: string[] = [];
 
-  if (typeof content === "string") {
-    return content;
-  }
+  lines.push(`# ${turnTitle}`);
+  lines.push("");
+  lines.push(`## Assistant ${page.pageIndex}`);
+  lines.push("");
 
-  const parts: string[] = [];
+  // Render assistant message content
+  lines.push(renderAssistantMessage(page.assistant, options));
 
-  for (const block of content) {
-    if (block.type === "text") {
-      parts.push(block.text);
-    } else if (block.type === "tool_result") {
-      const rendered = renderToolResult(block, toolUseMap, options);
+  // Render associated tool results
+  if (page.toolResults.length > 0) {
+    lines.push("");
+    lines.push("### Tool Results");
+    lines.push("");
+
+    for (const result of page.toolResults) {
+      const rendered = renderToolResult(result, toolUseMap, options);
       if (rendered) {
-        parts.push(rendered);
+        lines.push(rendered);
+        lines.push("");
       }
     }
   }
 
-  return parts.join("\n\n");
+  // Add uuid footer
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push(`<small style="color: gray">uuid: ${page.assistant.uuid}</small>`);
+
+  return lines.join("\n");
 }
 
 /**
@@ -319,7 +426,7 @@ function renderToolResult(
   // Show abbreviated Read results by default
   if (options.hideReadResults && toolName === "Read") {
     const filePath = toolUse?.input?.file_path as string || "(unknown file)";
-    return `\n*Read: \`${filePath}\` (contents omitted)*`;
+    return `*Read: \`${filePath}\` (contents omitted)*`;
   }
 
   // Hide all tool results if option is set
@@ -382,7 +489,7 @@ function renderToolResultGeneric(block: ToolResultBlock, collapse: boolean): str
     : resultText;
 
   const errorPrefix = block.is_error ? " (Error)" : "";
-  const content = `\n**Result${errorPrefix}:**
+  const content = `**Result${errorPrefix}:**
 
 \`\`\`
 ${displayText}

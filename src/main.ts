@@ -6,9 +6,12 @@ import { loadSessionFile } from "./parser.ts";
 import { extractConversationTurns, getSessionMetadata } from "./converter.ts";
 import {
   buildToolUseMap,
+  convertTurnsToPages,
   generateBookToml,
   generateSummary,
-  renderTurnToMarkdown,
+  getPageFilename,
+  renderUserPage,
+  renderAssistantPage,
 } from "./renderer.ts";
 import type { BookConfig, RenderOptions } from "./types.ts";
 
@@ -122,6 +125,11 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
+  // Convert turns to pages
+  const turnPages = convertTurnsToPages(turns);
+  const totalPages = turnPages.reduce((sum, tp) => sum + tp.pages.length, 0);
+  console.log(`Generated ${totalPages} pages`);
+
   // Get session metadata
   const metadata = getSessionMetadata(entries);
 
@@ -145,11 +153,11 @@ async function main(): Promise<void> {
   console.log(`Created: ${join(outputDir, "book.toml")}`);
 
   // Generate SUMMARY.md
-  const summary = generateSummary(turns, title);
+  const summary = generateSummary(turnPages, title);
   await Deno.writeTextFile(join(srcDir, "SUMMARY.md"), summary);
   console.log(`Created: ${join(srcDir, "SUMMARY.md")}`);
 
-  // Generate chapter files
+  // Generate page files
   const renderOptions: RenderOptions = {
     hideThinking: options.hideThinking,
     hideToolResults: options.hideToolResults,
@@ -160,12 +168,21 @@ async function main(): Promise<void> {
   // Build tool use map from all turns for cross-turn reference
   const toolUseMap = buildToolUseMap(turns);
 
-  for (const turn of turns) {
-    const markdown = renderTurnToMarkdown(turn, renderOptions, toolUseMap);
-    const filename = `chapter_${turn.index}.md`;
-    await Deno.writeTextFile(join(srcDir, filename), markdown);
+  for (const turnPage of turnPages) {
+    for (const page of turnPage.pages) {
+      let markdown: string;
+
+      if (page.type === "user") {
+        markdown = renderUserPage(page, turnPage.title, renderOptions);
+      } else {
+        markdown = renderAssistantPage(page, turnPage.title, renderOptions, toolUseMap);
+      }
+
+      const filename = getPageFilename(page);
+      await Deno.writeTextFile(join(srcDir, filename), markdown);
+    }
   }
-  console.log(`Created ${turns.length} chapter files`);
+  console.log(`Created ${totalPages} page files`);
 
   console.log(`\nDone! mdbook project created at: ${outputDir}`);
   console.log(`\nTo build the book, run:`);
