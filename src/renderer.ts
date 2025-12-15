@@ -468,16 +468,111 @@ function renderThinking(thinking: string): string {
 }
 
 /**
+ * Get language identifier from file extension
+ */
+function getLanguageFromExtension(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  const langMap: Record<string, string> = {
+    // Web
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    sass: "sass",
+    less: "less",
+    json: "json",
+    // Programming
+    py: "python",
+    rb: "ruby",
+    pl: "perl",
+    pm: "perl",
+    php: "php",
+    java: "java",
+    kt: "kotlin",
+    scala: "scala",
+    go: "go",
+    rs: "rust",
+    c: "c",
+    cpp: "cpp",
+    cc: "cpp",
+    h: "c",
+    hpp: "cpp",
+    cs: "csharp",
+    swift: "swift",
+    m: "objectivec",
+    // Shell/Config
+    sh: "bash",
+    bash: "bash",
+    zsh: "zsh",
+    fish: "fish",
+    ps1: "powershell",
+    yaml: "yaml",
+    yml: "yaml",
+    toml: "toml",
+    ini: "ini",
+    xml: "xml",
+    // Documentation
+    md: "markdown",
+    markdown: "markdown",
+    rst: "rst",
+    tex: "latex",
+    // Data
+    sql: "sql",
+    graphql: "graphql",
+    // Other
+    dockerfile: "dockerfile",
+    makefile: "makefile",
+    vim: "vim",
+    lua: "lua",
+    r: "r",
+    jl: "julia",
+    ex: "elixir",
+    exs: "elixir",
+    erl: "erlang",
+    hs: "haskell",
+    clj: "clojure",
+    lisp: "lisp",
+    el: "elisp",
+  };
+  return langMap[ext] || ext;
+}
+
+/**
+ * Determine the number of backquotes needed for fenced code block
+ * Returns at least 3, or more if content contains that many consecutive backquotes
+ * For markdown files, returns at least 4 for nesting support
+ */
+function getBackquoteCount(content: string, isMarkdown: boolean): number {
+  const minCount = isMarkdown ? 4 : 3;
+
+  // Find the longest sequence of backquotes in content
+  const matches = content.match(/`+/g);
+  if (!matches) return minCount;
+
+  const maxInContent = Math.max(...matches.map(m => m.length));
+  return Math.max(minCount, maxInContent + 1);
+}
+
+/**
  * Render tool_use block
  */
 function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
-  const inputJson = JSON.stringify(block.input, null, 2);
+  let content: string;
 
-  const content = `**Tool: ${block.name}**
+  if (block.name === "Write") {
+    // Special handling for Write tool
+    content = renderWriteToolUse(block);
+  } else {
+    const inputJson = JSON.stringify(block.input, null, 2);
+    content = `**Tool: ${block.name}**
 
 \`\`\`json
 ${inputJson}
 \`\`\``;
+  }
 
   if (collapse) {
     return `<details>
@@ -489,6 +584,25 @@ ${content}
   }
 
   return content;
+}
+
+/**
+ * Render Write tool_use block with proper code fencing
+ */
+function renderWriteToolUse(block: ToolUseBlock): string {
+  const filePath = block.input.file_path as string || "";
+  const fileContent = block.input.content as string || "";
+
+  const lang = getLanguageFromExtension(filePath);
+  const isMarkdown = lang === "markdown";
+  const backquoteCount = getBackquoteCount(fileContent, isMarkdown);
+  const fence = "`".repeat(backquoteCount);
+
+  return `**Tool: Write** \`${filePath}\`
+
+${fence}${lang}
+${fileContent}
+${fence}`;
 }
 
 /**
