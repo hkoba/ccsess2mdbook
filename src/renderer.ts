@@ -568,6 +568,12 @@ function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
   } else if (block.name === "Edit") {
     // Special handling for Edit tool
     content = renderEditToolUse(block);
+  } else if (block.name === "TodoWrite") {
+    // Special handling for TodoWrite tool
+    content = renderTodoWriteToolUse(block);
+  } else if (block.name === "Bash") {
+    // Special handling for Bash tool
+    content = renderBashToolUse(block);
   } else {
     const inputJson = JSON.stringify(block.input, null, 2);
     content = `**Tool: ${block.name}**
@@ -595,6 +601,54 @@ ${content}
 function renderEditToolUse(block: ToolUseBlock): string {
   const filePath = block.input.file_path as string || "";
   return `**Tool: Edit** \`${filePath}\``;
+}
+
+/**
+ * Render TodoWrite tool_use block as markdown todo list
+ */
+function renderTodoWriteToolUse(block: ToolUseBlock): string {
+  const todos = block.input.todos as Array<{
+    content: string;
+    status: string;
+    activeForm?: string;
+  }> || [];
+
+  if (todos.length === 0) {
+    return "**Tool: TodoWrite**\n\n*(empty todo list)*";
+  }
+
+  const lines = ["**Tool: TodoWrite**", ""];
+  for (const todo of todos) {
+    if (todo.status === "completed") {
+      lines.push(`- [x] ${todo.content}`);
+    } else {
+      lines.push(`- [ ] ${todo.content} *(${todo.status})*`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Render Bash tool_use block with command in code block
+ */
+function renderBashToolUse(block: ToolUseBlock): string {
+  const command = block.input.command as string || "";
+  const description = block.input.description as string || "";
+
+  const lines = ["**Tool: Bash**"];
+
+  if (description) {
+    lines.push("");
+    lines.push(`*${description}*`);
+  }
+
+  lines.push("");
+  lines.push("```sh");
+  lines.push(command);
+  lines.push("```");
+
+  return lines.join("\n");
 }
 
 /**
