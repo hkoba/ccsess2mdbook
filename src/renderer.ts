@@ -565,6 +565,9 @@ function renderToolUse(block: ToolUseBlock, collapse: boolean): string {
   if (block.name === "Write") {
     // Special handling for Write tool
     content = renderWriteToolUse(block);
+  } else if (block.name === "Edit") {
+    // Special handling for Edit tool
+    content = renderEditToolUse(block);
   } else {
     const inputJson = JSON.stringify(block.input, null, 2);
     content = `**Tool: ${block.name}**
@@ -584,6 +587,14 @@ ${content}
   }
 
   return content;
+}
+
+/**
+ * Render Edit tool_use block - only show file_path
+ */
+function renderEditToolUse(block: ToolUseBlock): string {
+  const filePath = block.input.file_path as string || "";
+  return `**Tool: Edit** \`${filePath}\``;
 }
 
 /**
@@ -633,6 +644,12 @@ function renderToolResult(
     return renderTaskResult(block);
   }
 
+  // For Edit tool, render with proper code fencing
+  if (toolName === "Edit") {
+    const filePath = toolUse?.input?.file_path as string || "";
+    return renderEditToolResult(block, filePath, options.collapseTools);
+  }
+
   // For other tools, use generic rendering
   return renderToolResultGeneric(block, options.collapseTools);
 }
@@ -656,6 +673,148 @@ function renderTaskResult(block: ToolResultBlock): string {
 
   const errorPrefix = block.is_error ? "**Error:**\n\n" : "";
   return errorPrefix + resultText;
+}
+
+/**
+ * Get comment prefix for a language
+ */
+function getCommentPrefix(lang: string): { start: string; end?: string } {
+  const lineCommentLangs: Record<string, string> = {
+    javascript: "//",
+    typescript: "//",
+    jsx: "//",
+    tsx: "//",
+    java: "//",
+    kotlin: "//",
+    scala: "//",
+    go: "//",
+    rust: "//",
+    c: "//",
+    cpp: "//",
+    csharp: "//",
+    swift: "//",
+    objectivec: "//",
+    php: "//",
+    perl: "#",
+    python: "#",
+    ruby: "#",
+    bash: "#",
+    zsh: "#",
+    fish: "#",
+    yaml: "#",
+    toml: "#",
+    r: "#",
+    julia: "#",
+    elixir: "#",
+    powershell: "#",
+    makefile: "#",
+    dockerfile: "#",
+    lua: "--",
+    haskell: "--",
+    sql: "--",
+    elisp: ";;",
+    lisp: ";;",
+    clojure: ";;",
+    vim: '"',
+    ini: ";",
+    latex: "%",
+    erlang: "%",
+  };
+
+  const blockCommentLangs: Record<string, { start: string; end: string }> = {
+    html: { start: "<!-- ", end: " -->" },
+    xml: { start: "<!-- ", end: " -->" },
+    markdown: { start: "<!-- ", end: " -->" },
+    css: { start: "/* ", end: " */" },
+    scss: { start: "/* ", end: " */" },
+    sass: { start: "/* ", end: " */" },
+    less: { start: "/* ", end: " */" },
+  };
+
+  if (blockCommentLangs[lang]) {
+    return blockCommentLangs[lang];
+  }
+
+  if (lineCommentLangs[lang]) {
+    return { start: lineCommentLangs[lang] + " " };
+  }
+
+  // Default to hash comment
+  return { start: "# " };
+}
+
+/**
+ * Render Edit tool result with proper code fencing
+ */
+function renderEditToolResult(
+  block: ToolResultBlock,
+  filePath: string,
+  collapse: boolean
+): string {
+  let resultText: string;
+
+  if (typeof block.content === "string") {
+    resultText = block.content;
+  } else if (Array.isArray(block.content)) {
+    resultText = block.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+  } else {
+    resultText = JSON.stringify(block.content, null, 2);
+  }
+
+  const lang = getLanguageFromExtension(filePath);
+  const comment = getCommentPrefix(lang);
+
+  // Extract the header line (e.g., "The file ... has been updated...")
+  // and convert the rest to code block
+  const lines = resultText.split("\n");
+  let headerLine = "";
+  let codeStartIndex = 0;
+
+  // Find the header line pattern
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].match(/^The file .* has been updated/)) {
+      headerLine = lines[i];
+      codeStartIndex = i + 1;
+      break;
+    }
+  }
+
+  // Get the code content
+  const codeLines = lines.slice(codeStartIndex);
+  const codeContent = codeLines.join("\n");
+
+  // Create comment from header line
+  let headerComment = "";
+  if (headerLine) {
+    if (comment.end) {
+      headerComment = `${comment.start}${headerLine}${comment.end}\n`;
+    } else {
+      headerComment = `${comment.start}${headerLine}\n`;
+    }
+  }
+
+  const isMarkdown = lang === "markdown";
+  const backquoteCount = getBackquoteCount(codeContent, isMarkdown);
+  const fence = "`".repeat(backquoteCount);
+
+  const errorPrefix = block.is_error ? "**Error:**\n\n" : "";
+  const content = `${errorPrefix}${fence}${lang}
+${headerComment}${codeContent}
+${fence}`;
+
+  if (collapse) {
+    return `<details>
+<summary>Edit Result</summary>
+
+${content}
+
+</details>`;
+  }
+
+  return content;
 }
 
 /**
