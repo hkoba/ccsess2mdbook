@@ -470,7 +470,7 @@ function renderThinking(thinking: string): string {
 /**
  * Get language identifier from file extension
  */
-function getLanguageFromExtension(filePath: string): string {
+export function getLanguageFromExtension(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
   const langMap: Record<string, string> = {
     // Web
@@ -545,7 +545,7 @@ function getLanguageFromExtension(filePath: string): string {
  * Returns at least 3, or more if content contains that many consecutive backquotes
  * For markdown files, returns at least 4 for nesting support
  */
-function getBackquoteCount(content: string, isMarkdown: boolean): number {
+export function getBackquoteCount(content: string, isMarkdown: boolean): number {
   const minCount = isMarkdown ? 4 : 3;
 
   // Find the longest sequence of backquotes in content
@@ -678,7 +678,7 @@ function renderTaskResult(block: ToolResultBlock): string {
 /**
  * Get comment prefix for a language
  */
-function getCommentPrefix(lang: string): { start: string; end?: string } {
+export function getCommentPrefix(lang: string): { start: string; end?: string } {
   const lineCommentLangs: Record<string, string> = {
     javascript: "//",
     typescript: "//",
