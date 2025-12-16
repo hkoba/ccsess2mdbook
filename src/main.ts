@@ -14,7 +14,7 @@ import {
   renderTextPage,
   renderToolPage,
 } from "./renderer.ts";
-import type { BookConfig, RenderOptions } from "./types.ts";
+import type { BookConfig, RenderOptions, SessionEntry } from "./types.ts";
 
 interface CliOptions {
   output: string;
@@ -31,10 +31,11 @@ function printHelp(): void {
 ccsess2mdbook - Convert Claude Code session files to mdbook format
 
 USAGE:
-  deno run -A src/main.ts <input.jsonl> [OPTIONS]
+  deno run -A src/main.ts <input.jsonl>... [OPTIONS]
 
 ARGUMENTS:
-  <input.jsonl>    Path to Claude Code session file (.jsonl)
+  <input.jsonl>...   Path(s) to Claude Code session file(s) (.jsonl)
+                     Multiple files will be merged in chronological order
 
 OPTIONS:
   -o, --output <dir>       Output directory (default: ./book)
@@ -45,12 +46,16 @@ OPTIONS:
   --collapse-tools         Collapse tool blocks in <details> tags
   -h, --help               Show this help message
 
-EXAMPLE:
+EXAMPLES:
+  # Single session
   deno run -A src/main.ts session.jsonl -o ./my-book --title "My Session"
+
+  # Multiple sessions (compaction continued)
+  deno run -A src/main.ts session1.jsonl session2.jsonl -o ./merged-book
 `);
 }
 
-function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions } | null {
+function parseCliArgs(args: string[]): { inputFiles: string[]; options: CliOptions } | null {
   const parsed = parseArgs(args, {
     string: ["output", "o", "title", "t"],
     boolean: ["hide-thinking", "hide-tool-results", "show-read-results", "collapse-tools", "help", "h"],
@@ -73,14 +78,14 @@ function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions 
     return null;
   }
 
-  const inputFile = parsed._[0] as string;
-  if (!inputFile) {
-    console.error("Error: Input file is required");
+  const inputFiles = parsed._.map(f => String(f));
+  if (inputFiles.length === 0) {
+    console.error("Error: At least one input file is required");
     return null;
   }
 
   return {
-    inputFile,
+    inputFiles,
     options: {
       output: (parsed.output || parsed.o || "./book") as string,
       title: (parsed.title || parsed.t || "") as string,
@@ -93,6 +98,80 @@ function parseCliArgs(args: string[]): { inputFile: string; options: CliOptions 
   };
 }
 
+/**
+ * Load and merge multiple session files
+ * Files are sorted by their first timestamp, then entries are merged
+ */
+async function loadAndMergeSessionFiles(files: string[]): Promise<SessionEntry[]> {
+  // Load all files with their metadata
+  const loadedSessions: { file: string; entries: SessionEntry[]; firstTimestamp: string | null }[] = [];
+
+  for (const file of files) {
+    const entries = await loadSessionFile(file);
+    const firstTimestamp = getFirstTimestamp(entries);
+    loadedSessions.push({ file, entries, firstTimestamp });
+    console.log(`  Loaded ${file}: ${entries.length} entries`);
+  }
+
+  // Sort sessions by first timestamp
+  loadedSessions.sort((a, b) => {
+    if (!a.firstTimestamp) return -1;
+    if (!b.firstTimestamp) return 1;
+    return a.firstTimestamp.localeCompare(b.firstTimestamp);
+  });
+
+  // Merge entries, tracking seen UUIDs to avoid duplicates
+  const seenUuids = new Set<string>();
+  const merged: SessionEntry[] = [];
+
+  for (const session of loadedSessions) {
+    for (const entry of session.entries) {
+      // Skip summary entries (compaction markers)
+      if (entry.type === "summary") {
+        continue;
+      }
+
+      // Skip duplicates based on uuid
+      const uuid = getEntryUuid(entry);
+      if (uuid && seenUuids.has(uuid)) {
+        continue;
+      }
+      if (uuid) {
+        seenUuids.add(uuid);
+      }
+
+      merged.push(entry);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Get first timestamp from session entries
+ */
+function getFirstTimestamp(entries: SessionEntry[]): string | null {
+  for (const entry of entries) {
+    if ((entry.type === "user" || entry.type === "assistant") && entry.timestamp) {
+      return entry.timestamp;
+    }
+  }
+  return null;
+}
+
+/**
+ * Get UUID from an entry
+ */
+function getEntryUuid(entry: SessionEntry): string | null {
+  if (entry.type === "user" || entry.type === "assistant") {
+    return entry.uuid;
+  }
+  if (entry.type === "file-history-snapshot") {
+    return entry.messageId;
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
   const result = parseCliArgs(Deno.args);
 
@@ -101,28 +180,30 @@ async function main(): Promise<void> {
     Deno.exit(result === null ? 0 : 1);
   }
 
-  const { inputFile, options } = result;
+  const { inputFiles, options } = result;
 
-  // Check input file exists
-  try {
-    await Deno.stat(inputFile);
-  } catch {
-    console.error(`Error: Input file not found: ${inputFile}`);
-    Deno.exit(1);
+  // Check all input files exist
+  for (const inputFile of inputFiles) {
+    try {
+      await Deno.stat(inputFile);
+    } catch {
+      console.error(`Error: Input file not found: ${inputFile}`);
+      Deno.exit(1);
+    }
   }
 
-  console.log(`Loading session file: ${inputFile}`);
+  console.log(`Loading ${inputFiles.length} session file(s)...`);
 
-  // Load and parse session file
-  const entries = await loadSessionFile(inputFile);
-  console.log(`Loaded ${entries.length} entries`);
+  // Load and merge session files
+  const entries = await loadAndMergeSessionFiles(inputFiles);
+  console.log(`Total: ${entries.length} entries after merging`);
 
   // Extract conversation turns
   const turns = extractConversationTurns(entries);
   console.log(`Extracted ${turns.length} conversation turns`);
 
   if (turns.length === 0) {
-    console.error("Error: No conversation turns found in session file");
+    console.error("Error: No conversation turns found in session file(s)");
     Deno.exit(1);
   }
 
@@ -137,7 +218,7 @@ async function main(): Promise<void> {
   // Determine title
   const title = options.title ||
     metadata.sessionId?.slice(0, 8) ||
-    basename(inputFile, ".jsonl");
+    basename(inputFiles[0], ".jsonl");
 
   // Create output directory structure
   const outputDir = options.output;

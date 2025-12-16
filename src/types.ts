@@ -67,7 +67,13 @@ export interface FileHistorySnapshot {
   snapshot: unknown;
 }
 
-export type SessionEntry = UserMessage | AssistantMessage | FileHistorySnapshot;
+export interface SummaryEntry {
+  type: "summary";
+  summary: string;
+  leafUuid: string;
+}
+
+export type SessionEntry = UserMessage | AssistantMessage | FileHistorySnapshot | SummaryEntry;
 
 // Conversation structure
 // A turn is a sequence of messages starting with a user text message
